@@ -1,0 +1,90 @@
+# 가설 A 사전 등록 (2026-10-13). 이 파일 커밋 시점이 설계 동결 시점이다.
+# 결과와 관계없이 주제, 가설, 측정값, 판정 기준은 바꾸지 않는다.
+# 사람이 읽는 설명: docs/가설A_설명.md (작성 예정)
+
+status: final
+registered: 2026-10-13
+topic: "학습 데이터 window 길이와 이미지 기여도의 관계"
+author: 김형우
+
+hypothesis: >
+  학습 데이터 window(테스트 주 직전부터 몇 주)가 짧을수록 모델이 상품별 수요 패턴을
+  외우기 어려워 콘텐츠(이미지) 신호에 더 의존하므로, 상대 이미지 기여도가 커진다.
+
+# 실행 전 명확화 (해석 확정, 설계 변경 아님). 모두 학습 실행 전에 커밋한다.
+clarifications:
+  - date: 2026-10-13
+    item: "window 2주의 최소 학습 가능 조건"
+    decision: "학습 쌍이 0건이면 스킵하지 않고 그대로 돌려 수렴 실패를 그대로 기록한다 (실패도 결과)."
+    reason: "결과를 보기 전에 조건을 바꾸지 않기 위함."
+  - date: 2026-10-13
+    item: "학습 설정"
+    decision: "paper.yaml train.default (h2) 그대로. window만 바꾼다."
+    reason: "window 효과를 분리 측정하려면 다른 변수를 고정."
+
+# ---------------------------------------------------------------- 실험 조건
+windows: [2, 4, 8, 16, 26]   # weeks. 26은 기존 baseline과 같음
+encoder: marqo               # 재현 검증은 보조로만, 확증 검정은 Marqo만
+conditions:
+  real: C2            # text + image (Marqo)
+  shuffle_global: C3  # text + 전체 섞은 이미지 (내용 기여도 대조군)
+  text_only: C0       # text만 (보조, 각 window에서 텍스트만 성능 참고)
+
+train_params: "paper.yaml train.default (h2): lr=0.0005, epochs=8, batch=2048, temp=0.05, hidden=512, emb_dim=128, label_weeks=6, max_hist=50"
+unchanged_from_baseline:
+  - "데이터 분할 (main split, 테스트 주 2020-09-16~22)"
+  - "검증 주 (튜닝 재사용, 재튜닝 없음)"
+  - "텍스트 임베딩 (all-MiniLM)과 Marqo 이미지 임베딩"
+  - "모델 구조 (ID 없는 Two-Tower)"
+  - "섞은 이미지 대응표 (shuffle_global seed 42·43·44)"
+  - "label_weeks (6)"
+
+# window < label_weeks일 때 처리
+window_vs_label_weeks:
+  issue: "window=2·4·8일 때 label_weeks(6)보다 작으면 build_samples가 샘플을 못 만든다."
+  decision: "label_weeks를 window와 min(label_weeks, window)로 자동 조정. 조정 사실은 run_info.json에 기록."
+
+# ---------------------------------------------------------------- 측정값
+measure:
+  primary: relative_content   # [R(C2) − R(C3)] / R(C3)
+  also_report: absolute_content   # R(C2) − R(C3)
+  metric: "고객별 평균 Recall@300"
+  bootstrap: {n: 1000, unit: customer, paired: true, seed: 42}
+  seeds: [42, 43, 44]
+  seed_aggregation: "seed별로 계산해 평균, 모든 seed·조건·window가 같은 부트스트랩 추출을 공유"
+
+segments:
+  main: "non_repurchase (주 평가)"
+  also_report: ["all", "new_item"]
+
+# ---------------------------------------------------------------- 확증 검정
+confirmatory:
+  primary_test:
+    name: "극단 window 비교"
+    comparison: "non_repurchase 구간에서 상대 기여도(window=2) − 상대 기여도(window=26)"
+    decision: "짝지은 부트스트랩 95% 구간 하한 > 0 이면 지지 (짧은 window일수록 큼)"
+  secondary_test:
+    name: "선형 추세"
+    comparison: "상대 기여도 ~ β × log2(window), 전체 5개 window 점으로 회귀 (seed별 평균 후 가중 OLS 가능)"
+    decision: "β < 0 이고 부트스트랩 95% 구간 상한 < 0 이면 추세 지지. 단독 지지 근거로는 쓰지 않고, 주 검정 결과의 방향 확인용으로만 사용."
+  correction: "주 검정 하나만 쓰므로 보정 없음. 선형 추세는 탐색적."
+
+# ---------------------------------------------------------------- 탐색적
+exploratory:
+  - "all 구간, new_item 구간에서의 window 효과"
+  - "텍스트만(C0) 성능의 window 효과 — 가설이 지지되면 C0 성능도 같은 방향인지 확인"
+  - "각 window에서의 절대 Recall@300 (C0·C2·C3 모두)"
+  - "window 길이와 학습 쌍 수(n_train_pairs)의 관계 — 쌍 수가 결정 요인인지 window 자체인지 분리 참고"
+  - "label_weeks 자동 조정이 결과에 미치는 영향 (조정 안 한 window=26 대조 참고)"
+
+# ---------------------------------------------------------------- 실행 묶음
+runs:
+  group: W
+  split: main
+  out_subdir_pattern: "w{window}w"
+  # 예: outputs/W/main/w4w/C2_seed42/
+  conditions_per_window: [C0, C2, C3]
+  seeds: [42, 43, 44]
+  total_runs: "5 windows × 3 conds × 3 seeds = 45회 (약 10~15분 Colab L4)"
+
+report_regardless: true   # 지지·불지지 모두 그대로 보고

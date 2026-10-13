@@ -203,12 +203,22 @@ def predict(model, X, flat, offsets, k, device, chunk=4096, P_pred=None, seen=No
     return np.concatenate(out)
 
 
-def run(cfg, exps, paths, cond, seed, split, group, mode="final", hp_name=None, device=None, log=print):
-    """실험 1회. 드라이브에 run_info.json이 이미 있으면 건너뛴다 (중단 후 이어 돌리기 가능)."""
+def run(cfg, exps, paths, cond, seed, split, group, mode="final", hp_name=None, device=None, log=print,
+        train_window_weeks=None, out_subdir=None):
+    """실험 1회. 드라이브에 run_info.json이 이미 있으면 건너뛴다 (중단 후 이어 돌리기 가능).
+
+    train_window_weeks: None이면 전체 학습 기간 사용(기존 동작). 정수면 테스트/검증 시작 직전 그 주 수만큼만 history로 사용.
+    out_subdir: None이면 기존 경로. 지정하면 outputs/{group}/{split}/{out_subdir}/{cond}_seed{seed}에 저장.
+    """
     import torch
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     if mode == "final":
-        name, out_dir, overrides = f"{cond}_seed{seed}", paths.run_dir(group, split, f"{cond}_seed{seed}"), None
+        name = f"{cond}_seed{seed}"
+        if out_subdir:
+            out_dir = paths.outputs / group / split / out_subdir / name
+        else:
+            out_dir = paths.run_dir(group, split, name)
+        overrides = None
     else:
         name = f"{cond}_seed{seed}_{hp_name}"
         out_dir = paths.outputs / "tuning" / split / name
@@ -226,6 +236,10 @@ def run(cfg, exps, paths, cond, seed, split, group, mode="final", hp_name=None, 
     start = pd.Timestamp(stats["valid_start"] if mode == "tune" else stats["test_start"])
     targets = valid_targets if mode == "tune" else test_targets
     history = history[history["t_dat"] < start]
+    if train_window_weeks is not None:
+        window_start = start - pd.Timedelta(weeks=int(train_window_weeks))
+        history = history[history["t_dat"] >= window_start]
+        log(f"[{name}] train_window_weeks={train_window_weeks}: history {len(history):,}건 (기간 {window_start.date()} ~ {start.date()})")
 
     t0 = time.time()
     X = item_features(paths, spec, seed)
@@ -247,6 +261,7 @@ def run(cfg, exps, paths, cond, seed, split, group, mode="final", hp_name=None, 
             "id_setting": id_name, "id_cfg": id_cfg, "n_seen_items": int(seen.sum()),
             "n_train_pairs": int(len(samples["pair_key"])), "n_users": int(len(users)),
             "users_without_history": int((counts == 0).sum()), "train_seconds": round(time.time() - t0, 1),
+            "train_window_weeks": train_window_weeks, "out_subdir": out_subdir,
             "created_at": now(), **environment_info()}
     if mode == "tune":
         info["valid_recall@300"] = metrics.recall_user_mean(cands, users, targets, cfg["eval"]["k"])
