@@ -1,0 +1,108 @@
+# 가설 B 사전 등록 (2026-10-15). 이 파일 커밋 시점이 설계 동결 시점이다.
+# 결과와 관계없이 주제·가설·라벨링 룰·판정 기준은 바꾸지 않는다.
+# 사람이 읽는 설명: Notion "논문 실험" DB의 가설 B 페이지.
+
+status: final
+registered: 2026-10-15
+topic: "상품 수명 주기 단계와 이미지 기여도의 관계"
+author: 김형우
+
+hypothesis: >
+  상품 수명 주기 단계(신규 등장 → 상승 → 성숙 → 쇠퇴)에 따라 상대 이미지 기여도가 다르다.
+  특히 상승(growth) 단계에서 가장 크고, 성숙(maturity) 단계에서 가장 작다.
+  메커니즘: 상승 단계 상품은 과거 구매·세션 패턴이 적어 모델이 외우기 어렵고 콘텐츠(이미지)
+  신호에 더 의존한다. 성숙 단계 상품은 반복 구매·인기 패턴이 충분히 쌓여 ID·행동 패턴만으로도
+  설명 가능하므로 이미지의 상대 기여도가 상대적으로 작다.
+
+# 실행 전 명확화 (해석 확정, 설계 변경 아님). 모두 분석 실행 전에 커밋한다.
+clarifications:
+  - date: 2026-10-15
+    item: "라벨링 참조 기간"
+    decision: "main split의 history(2020-03-11~2020-09-15, 학습 26주+검증 1주) 안에서만 상품별 주간 판매 시계열을 집계. H&M 전체 거래(2018~)는 쓰지 않는다."
+    reason: "라벨이 학습 조건과 분리되지 않도록 하고, 재현에 필요한 입력을 history.parquet 한 개로 좁히기 위함."
+  - date: 2026-10-15
+    item: "학습 재사용"
+    decision: "가설 A의 outputs/W/main/w26w/{C2,C3}_seed{42,43,44} 산출물을 그대로 재사용한다. 가설 B는 분석 단계만 추가하고 재학습은 하지 않는다."
+    reason: "학습 조건을 가설 A의 window=26과 동일하게 고정하여 lifecycle 효과만 분리하기 위함."
+  - date: 2026-10-15
+    item: "분석 대상 세그먼트"
+    decision: "주 평가는 non_repurchase. 재구매는 ID·행동 패턴이 자명하게 작동해 lifecycle 효과를 흐릴 수 있다."
+    reason: "가설 A와 동일한 주 세그먼트. 결과 비교 가능성 유지."
+
+# ---------------------------------------------------------------- 라벨링 룰 (고정)
+labeling:
+  reference_window_weeks: 26   # history 범위와 동일
+  intro_weeks: 4               # test 시작 직전 4주 안에 처음 등장한 상품
+  recent_weeks: 8              # slope·recent_sales 집계 창
+  slope_up: 0.05               # log1p(weekly_sales) ~ week_idx 회귀 β 기준치
+  slope_down: -0.05
+  flat_threshold: 0.05         # |β| ≤ 0.05 이면 평평
+  maturity_cumulative_quantile: 0.70   # 전체 상품의 상위 30% (학습 기간 누적 판매 기준)
+  recent_sales_floor: 5        # 최근 recent_weeks 주의 총 판매 수가 이 값 미만이면 성숙·상승 자격 없음
+  # 조건이 겹치면 priority 앞의 라벨이 우선 적용
+  priority: [introduction, decline, growth, maturity, unassigned]
+  rules:
+    - name: introduction
+      cond: "age_weeks <= intro_weeks"
+    - name: decline
+      cond: "recent_slope <= slope_down AND peak_week_offset >= recent_weeks AND recent_sales >= recent_sales_floor"
+    - name: growth
+      cond: "recent_slope >= slope_up AND recent_sales >= recent_sales_floor AND age_weeks > intro_weeks"
+    - name: maturity
+      cond: "abs(recent_slope) <= flat_threshold AND recent_sales >= recent_sales_floor AND total_sales >= Q(maturity_cumulative_quantile)"
+    - name: unassigned
+      cond: "그 외 (판매 부족·중간 추세 상품). 분석에서 제외하지는 않고 보조로만 보고."
+
+# ---------------------------------------------------------------- 측정값
+measure:
+  primary: relative_content   # [R(C2) − R(C3)] / R(C3), 고객별 평균 Recall@300
+  also_report: absolute_content
+  metric: "고객별 평균 Recall@300"
+  bootstrap: {n: 1000, unit: customer, paired: true, seed: 42}
+  seeds: [42, 43, 44]
+  seed_aggregation: "seed별로 상대 기여도를 계산해 평균. 모든 조건·단계가 같은 부트스트랩 추출(가중치)을 공유."
+
+# ---------------------------------------------------------------- 분석 세그먼트
+segments:
+  main: "non_repurchase (주 평가, 가설 A와 동일)"
+  within_segment: "non_repurchase 안에서 테스트 상품의 lifecycle 라벨로 서브셋 분할"
+  stages: [introduction, growth, maturity, decline]
+  also_report:
+    - "unassigned 서브셋도 함께 보고 (해석 보조)"
+    - "all 세그먼트에서의 단계별 상대 기여도 (탐색적)"
+
+# ---------------------------------------------------------------- 확증 검정
+confirmatory:
+  primary_test:
+    name: "상승 vs 성숙"
+    comparison: "non_repurchase 안에서 상대 기여도(growth) − 상대 기여도(maturity)"
+    decision: "짝지은 부트스트랩 95% CI 하한 > 0 이면 지지 (상승이 성숙보다 큼)"
+  secondary_tests:
+    - name: "상승 vs 성숙·쇠퇴 평균"
+      comparison: "상대 기여도(growth) − 0.5 × (상대 기여도(maturity) + 상대 기여도(decline))"
+      decision: "짝지은 부트스트랩 95% CI 하한 > 0 이면 추세 지지"
+    - name: "성숙이 최저"
+      comparison: "min(상대 기여도(introduction), 상대 기여도(growth), 상대 기여도(decline)) − 상대 기여도(maturity)"
+      decision: "짝지은 부트스트랩 95% CI 하한 > 0 이면 추세 지지"
+  correction: "주 검정 하나만 확증으로 쓴다. 보조 검정 2개는 방향 확인용이며 단독 지지 근거로 쓰지 않는다."
+
+# ---------------------------------------------------------------- 탐색적
+exploratory:
+  - "4단계 쌍대 비교 전체 (6쌍)의 짝지은 95% CI"
+  - "all 세그먼트에서의 단계별 상대 기여도"
+  - "단계별 absolute content 기여도 (R(C2) − R(C3))"
+  - "라벨링 룰 민감도: slope 기준치·intro_weeks·maturity quantile 변경 시 주 검정 CI 변화"
+  - "단계별 평균 total_sales·age_weeks 등 라벨링 메타 (서브셋 특성)"
+
+# ---------------------------------------------------------------- 실행 묶음
+runs:
+  reuse: "outputs/W/main/w26w/{C2,C3}_seed{42,43,44} (가설 A에서 생성)"
+  group: W
+  split: main
+  out_subdir: w26w
+  conditions:
+    real: C2
+    shuffle_global: C3
+  seeds: [42, 43, 44]
+
+report_regardless: true   # 지지·불지지 모두 그대로 보고
