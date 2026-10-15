@@ -1,0 +1,77 @@
+# 가설 C2 사전 등록 (2026-10-15). 이 파일 커밋 시점이 설계 동결 시점이다.
+# 결과와 관계없이 주제·라벨링 룰·측정값·판정 기준은 바꾸지 않는다.
+
+status: final
+registered: 2026-10-15
+topic: "사용자 활동량(학습 기간 구매 수) 분위수와 이미지 기여도"
+author: 김형우
+
+hypothesis: >
+  테스트 사용자의 학습 기간 구매 수(활동량)가 적을수록 상대 이미지 기여도가 크다.
+  메커니즘: 사용자별 이력이 적으면 모델이 그 사용자의 선호 패턴을 외우기 어렵고,
+  콘텐츠(이미지) 신호가 사용자별 선호를 메꾸는 비중이 커진다. 가설 A(학습 데이터량)와
+  가설 B(상품 수명)의 "데이터 부족 → 콘텐츠 의존" 메커니즘을 사용자 축에서 재현한다.
+
+# 실행 전 명확화
+clarifications:
+  - date: 2026-10-15
+    item: "학습 재사용"
+    decision: "가설 A의 outputs/W/main/w26w/{C2,C3}_seed{42,43,44} 산출물을 그대로 재사용. 추가 학습 없음."
+    reason: "학습 조건을 window=26으로 고정하여 사용자 활동량 효과만 분리."
+  - date: 2026-10-15
+    item: "활동량 집계 범위"
+    decision: "main split의 train 구간(2020-03-11 ~ 2020-09-08, 26주)만 사용. 검증 1주는 제외."
+    reason: "활동량 라벨이 학습 입력과 완전히 분리되지 않지만, 학습·검증 통합 집계보다 '학습 데이터가 본 사용자 활동량'을 더 정확히 반영."
+  - date: 2026-10-15
+    item: "주 세그먼트"
+    decision: "non_repurchase (가설 A·B와 동일)."
+    reason: "재구매는 ID·행동 패턴이 자명하게 작동해 활동량 효과를 가린다."
+
+# ---------------------------------------------------------------- 라벨링 룰 (고정)
+labeling:
+  reference_range: "train (2020-03-11 ~ 2020-09-08, 26주)"
+  quantiles: 5                   # Q1 (최저 20%) ~ Q5 (최상위 20%)
+  tie_handling: "pandas qcut, duplicates='drop'. 분위수 경계에 동점이 많으면 실제 분위수 수가 5보다 작아질 수 있고 그 사실을 그대로 기록."
+  min_train_purchases: 5         # data_prep.build_split에서 이미 학습 구매 ≥ 5인 사용자만 남음 (중복 조건 명시)
+  label_column: "activity_quintile"   # 1 ~ 5
+
+# ---------------------------------------------------------------- 측정값
+measure:
+  primary: relative_content   # [R(C2) − R(C3)] / R(C3)
+  metric: "고객별 평균 Recall@300"
+  bootstrap: {n: 1000, unit: customer, paired: true, seed: 42}
+  seeds: [42, 43, 44]
+  seed_aggregation: "seed별 상대 기여도 평균. 모든 조건·분위수가 같은 부트스트랩 추출 공유."
+
+segments:
+  main: "non_repurchase × activity_quintile (5 cells)"
+  also_report: "all × activity_quintile"
+
+# ---------------------------------------------------------------- 확증 검정
+confirmatory:
+  primary_test:
+    name: "극단 분위수 비교: 저활동(Q1) vs 고활동(Q5)"
+    comparison: "non_repurchase 안에서 상대 기여도(Q1) − 상대 기여도(Q5)"
+    decision: "짝지은 부트스트랩 95% CI 하한 > 0 이면 지지"
+  secondary_tests:
+    - name: "선형 추세"
+      comparison: "상대 기여도 ~ β × (분위수 index 1→5) OLS, 전체 5점 회귀 (seed별 평균 후)"
+      decision: "β < 0 이고 CI 상한 < 0 이면 추세 지지"
+  correction: "주 검정 하나만 확증. 선형 추세는 방향 확인용."
+
+# ---------------------------------------------------------------- 탐색적
+exploratory:
+  - "all 세그먼트에서의 분위수별 상대 기여도"
+  - "분위수별 평균 구매 수·사용자 수·테스트 구매 수 (서브셋 특성)"
+  - "분위수별 absolute content 기여도 R(C2) − R(C3)"
+  - "분위수별 텍스트만(R(C3))·실제(R(C2)) 절대 Recall"
+  - "가설 B의 lifecycle 단계 × C2의 활동 분위수 교차 (가능하면)"
+
+# ---------------------------------------------------------------- 실행 묶음
+runs:
+  reuse: "outputs/W/main/w26w/{C2,C3}_seed{42,43,44} (가설 A에서 생성)"
+  group: W
+  split: main
+  out_subdir: w26w
+
+report_regardless: true

@@ -1,0 +1,77 @@
+# 가설 C1 사전 등록 (2026-10-15). 이 파일 커밋 시점이 설계 동결 시점이다.
+# 결과와 관계없이 주제·측정값·판정 기준은 바꾸지 않는다.
+# 사람이 읽는 설명: Notion "논문 실험" DB의 가설 C1 페이지.
+
+status: final
+registered: 2026-10-15
+topic: "학습 window 길이와 상품 수명 주기 단계의 교호작용 (가설 A × B)"
+author: 김형우
+
+hypothesis: >
+  학습 window 길이가 상대 이미지 기여도에 미치는 효과는 상품 수명 주기 단계에 따라 다르다.
+  특히 maturity(성숙) 상품에서 window 축소의 효과가 가장 크고, introduction(신규) 상품에서
+  가장 작다. 메커니즘: 성숙 상품은 평상시 ID·행동 패턴이 많이 쌓여 외우기 쉬우나, 학습 데이터가
+  적어지면 그 패턴이 깨져 콘텐츠(이미지) 신호에 상대적으로 더 의존하게 된다. 신규 상품은
+  이미 ID·행동 패턴 자체가 거의 없어 window를 더 줄여도 추가로 깨질 패턴이 없다.
+
+# 실행 전 명확화
+clarifications:
+  - date: 2026-10-15
+    item: "학습·라벨 재사용"
+    decision: "가설 A의 outputs/W/main/w{2,4,8,16,26}w/{C2,C3}_seed{42,43,44}와 가설 B의 processed/main/lifecycle_labels.parquet을 그대로 재사용. 추가 학습·라벨링 없음."
+    reason: "A, B 결과를 교차 분해만 하는 사후 분석이므로 설계를 완전히 상속."
+  - date: 2026-10-15
+    item: "주 세그먼트"
+    decision: "non_repurchase 안에서 lifecycle 단계로 서브셋 분할 (가설 B와 동일)."
+    reason: "가설 A·B와 세그먼트를 동일하게 유지해 결과 비교 가능성 확보."
+  - date: 2026-10-15
+    item: "주 교호작용 쌍"
+    decision: "maturity vs introduction (단계 수명 축의 양 끝). 가설 B에서 maturity가 최저 상대 기여도, introduction이 최대였음에 기반."
+    reason: "가설 B의 7-2에서 두 단계가 가장 크게 벌어졌으므로 window 축소 효과가 가장 극적으로 다르게 나올 쌍."
+
+# ---------------------------------------------------------------- 입력
+inputs:
+  predictions: "outputs/W/main/w{window}w/{cond}_seed{seed}/candidates.npy (가설 A)"
+  lifecycle_labels: "processed/main/lifecycle_labels.parquet (가설 B)"
+  windows: [2, 4, 8, 16, 26]
+  conditions:
+    real: C2            # text + marqo
+    shuffle_global: C3  # text + 전체 섞은 이미지 (상대 기여도 분모)
+  seeds: [42, 43, 44]
+  stages: [introduction, growth, maturity, decline]
+
+# ---------------------------------------------------------------- 측정값
+measure:
+  primary: relative_content   # [R(C2) − R(C3)] / R(C3) in (non_repurchase × stage)
+  metric: "고객별 평균 Recall@300"
+  bootstrap: {n: 1000, unit: customer, paired: true, seed: 42}
+  seed_aggregation: "seed별 상대 기여도 평균. 모든 window·cond·stage·seed가 같은 부트스트랩 추출 공유."
+
+segments:
+  main: "non_repurchase × stage (4 cells)"
+  also_report: "all × stage, non_repurchase × unassigned"
+
+# ---------------------------------------------------------------- 확증 검정
+confirmatory:
+  primary_test:
+    name: "교호작용: maturity와 introduction의 window 효과 차이"
+    comparison: "[R_rel(w=2, maturity) − R_rel(w=26, maturity)] − [R_rel(w=2, introduction) − R_rel(w=26, introduction)]"
+    decision: "짝지은 부트스트랩 95% CI 하한 > 0 이면 지지 (성숙에서 window 효과가 신규보다 큼)"
+  secondary_tests:
+    - name: "window 효과 복제 (각 단계)"
+      comparison: "각 stage s에 대해 R_rel(w=2, s) − R_rel(w=26, s)"
+      decision: "네 단계 모두 CI 하한 > 0 이면 가설 A 결과가 모든 단계에서 복제됨"
+    - name: "성숙에서 효과 최대"
+      comparison: "Δ_maturity − max(Δ_introduction, Δ_growth, Δ_decline)   where Δ_s = R_rel(w=2, s) − R_rel(w=26, s)"
+      decision: "짝지은 95% CI 하한 > 0 이면 maturity가 전체 최대"
+  correction: "주 검정 하나만 확증. 보조 2개는 방향·일관성 확인용."
+
+# ---------------------------------------------------------------- 탐색적
+exploratory:
+  - "stage별 선형 추세 β_s = ∂R_rel/∂log2(window), 네 단계 각각"
+  - "6쌍의 Δ_s − Δ_s' 모두 (교호작용 지도)"
+  - "all 세그먼트에서의 교차 분해"
+  - "window × stage 20셀 상대 기여도 히트맵"
+  - "stage별 n_train_pairs와의 상관 (가설 A의 교란 가설 재검토)"
+
+report_regardless: true
