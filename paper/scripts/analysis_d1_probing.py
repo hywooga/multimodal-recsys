@@ -35,16 +35,29 @@ def _load():
 
 
 def _load_embeddings(paths, prereg):
-    """사전등록된 네 임베딩 로드. combined는 concat으로 생성."""
+    """사전등록된 네 임베딩 로드. combined는 concat으로 생성.
+
+    shuffle_global_seed{s}.npy는 2D 임베딩이 아니라 **1D 매핑 인덱스**
+    (상품 i 자리에 들어갈 다른 상품의 idx)로 저장되어 있다. 1D일 경우
+    먼저 로드된 image 임베딩을 사용해 2D로 재구성한다.
+    """
     emb = {}
     for e in prereg["embeddings"]:
         name = e["name"]
         if name == "combined":
             continue   # 뒤에서 생성
         src = paths.embeddings / Path(e["source"]).name
-        arr = np.load(src).astype(np.float32)
+        arr = np.load(src)
+        if arr.ndim == 1:
+            if "image" not in emb:
+                raise RuntimeError(f"{name}이 1D 매핑인데 image 임베딩이 먼저 로드돼 있어야 한다")
+            idx = arr.astype(np.int64)
+            arr = emb["image"][idx].astype(np.float32)
+            print(f"  {name:>16}: {arr.shape} (1D 매핑 → image 임베딩 재구성)")
+        else:
+            arr = arr.astype(np.float32)
+            print(f"  {name:>16}: {arr.shape} from {src.name}")
         emb[name] = arr
-        print(f"  {name:>16}: {arr.shape} from {src.name}")
     # combined = concat(text, image)
     emb["combined"] = np.concatenate([emb["text"], emb["image"]], axis=1)
     print(f"  {'combined':>16}: {emb['combined'].shape} (concat text + image)")
