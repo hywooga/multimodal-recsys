@@ -1,0 +1,128 @@
+# 가설 D1 사전 등록 (2026-10-17). 이 파일 커밋 시점이 설계 동결 시점이다.
+# 결과와 관계없이 target·임베딩·CV·분류기·판정 기준은 바꾸지 않는다.
+# 사람이 읽는 설명: Notion "논문 실험" DB의 가설 D1 페이지.
+
+status: final
+registered: 2026-10-17
+topic: "상품 임베딩의 속성 선형 분리 가능성 (Representation Probing)"
+author: 김형우
+
+hypothesis: >
+  멀티모달 상품 임베딩(text ⊕ image)이 appearance·pattern 같은 "텍스트가 설명하지 못하는 속성"에서
+  text-only 임베딩보다 유의하게 높은 선형 분리 가능성(probing accuracy)을 보인다. 반대로 pgroup 같은
+  "텍스트 기반 분류 속성"에서는 combined가 text와 비슷하거나 약간만 높다. 섞은 이미지는 유의미한
+  속성 신호를 담지 않아 chance 수준에 머문다. 이로써 가설 A·B·C의 "이미지가 돕는다"는 성능 수준
+  관찰이 "이미지 임베딩이 외관 속성을 담아내서"라는 **표현 수준의 메커니즘**으로 설명된다.
+
+# 실행 전 명확화
+clarifications:
+  - date: 2026-10-17
+    item: "임베딩 원천"
+    decision: "01_data_embeddings 노트북이 저장한 `embeddings/text_minilm.npy`, `embeddings/img_marqo.npy`, `embeddings/shuffle_global_seed42.npy` 그대로. 재추출·추가 PCA 없음."
+    reason: "가설 A·B·C가 사용한 바로 그 입력 임베딩을 분석해 추천 모델의 입력 특성을 직접 측정하기 위함."
+  - date: 2026-10-17
+    item: "학습된 모델 임베딩 분석 제외"
+    decision: "Phase 1은 raw 입력 임베딩만. 학습된 상품 타워 최종 임베딩 추출은 Phase 2로 분리(결과를 보고 결정)."
+    reason: "모델 forward·checkpoint 접근이 Phase 1에 필요 없음. Phase 1 결과로 raw 수준에서 가설이 확인되면 Phase 2는 보강용."
+  - date: 2026-10-17
+    item: "속성 범위"
+    decision: "items.parquet의 appearance·pgroup·colour_group_name·desc_mentions_pattern 네 가지만. 다른 속성 제외."
+    reason: "데이터 가공 없이 가져다 쓸 수 있고, 해석이 명확한 축만. 결과 보고 늘리지 않음."
+  - date: 2026-10-17
+    item: "분류기와 CV"
+    decision: "sklearn LogisticRegression(C=1.0, max_iter=2000, class_weight='balanced', solver='lbfgs', multi_class='auto'), 5-fold StratifiedKFold(shuffle=True, random_state=42). CV 안에서 정규화는 하지 않음(임베딩이 이미 L2 정규화 상태)."
+    reason: "표준 선형 probing. 하이퍼파라미터 튜닝은 하지 않음(결과를 보고 모델 선택하는 걸 방지)."
+
+# ---------------------------------------------------------------- 임베딩
+embeddings:
+  - name: text
+    source: "embeddings/text_minilm.npy"
+    dim: 256
+    description: "all-MiniLM-L6-v2 → PCA 256 + L2"
+  - name: image
+    source: "embeddings/img_marqo.npy"
+    dim: 256
+    description: "Marqo-FashionSigLIP → PCA 256 + L2"
+  - name: combined
+    source: "concat(text, image)"
+    dim: 512
+    description: "두 임베딩 단순 연결. 추가 정규화 없음."
+  - name: shuffled_image
+    source: "embeddings/shuffle_global_seed42.npy"
+    dim: 256
+    description: "상품마다 다른 상품의 이미지가 배정된 섞은 임베딩. 음성 대조군."
+
+# ---------------------------------------------------------------- Target
+targets:
+  - name: appearance
+    column: "appearance"
+    type: multiclass
+    classes_from: data
+    description: "{solid, pattern, texture} 3-class. 외관의 시각 축."
+    exclude_null: true
+  - name: pgroup
+    column: "pgroup"
+    type: multiclass
+    classes_from: data
+    description: "상품 대분류(상의/하의/신발 등). 텍스트 기반 분류 속성."
+    exclude_null: true
+  - name: colour_group
+    column: "colour_group_name"
+    type: multiclass
+    classes_from: data
+    description: "색상 그룹(20+ class). 시각·텍스트 둘 다에 신호 있음."
+    exclude_null: true
+    min_class_count: 50   # 50개 미만 색상 그룹은 제외(소수 클래스가 CV를 불안정하게 만듬)
+  - name: desc_mentions_pattern
+    column: "desc_mentions_pattern"
+    type: binary
+    description: "텍스트 설명에 패턴 단어 포함? 텍스트 기반 특징이므로 text가 가장 강할 것으로 예상."
+
+# ---------------------------------------------------------------- 분류기와 CV
+classifier:
+  name: sklearn.linear_model.LogisticRegression
+  params: {C: 1.0, max_iter: 2000, class_weight: balanced, solver: lbfgs, random_state: 42}
+
+cv:
+  name: sklearn.model_selection.StratifiedKFold
+  params: {n_splits: 5, shuffle: true, random_state: 42}
+
+metrics:
+  primary: accuracy
+  also_report: [macro_f1, per_class_f1]
+  bootstrap_ci: {n: 1000, seed: 42, unit: "fold-aggregated predictions"}
+
+# ---------------------------------------------------------------- 판정 기준
+confirmatory:
+  primary_test:
+    name: "appearance에서 combined > text"
+    comparison: "accuracy(combined, appearance) − accuracy(text, appearance)"
+    decision: "짝지은 부트스트랩 95% CI 하한 > 0 이면 지지"
+  secondary_tests:
+    - name: "appearance에서 image > text"
+      comparison: "accuracy(image, appearance) − accuracy(text, appearance)"
+      decision: "95% CI 하한 > 0 이면 지지"
+    - name: "desc_mentions_pattern에서 text ≥ image"
+      comparison: "accuracy(text, desc_mentions_pattern) − accuracy(image, desc_mentions_pattern)"
+      decision: "95% CI 하한 > 0 이면 지지 (텍스트 기반 특징이라 당연한 방향, sanity check 성격)"
+    - name: "shuffled_image는 chance 수준"
+      comparison: "accuracy(shuffled_image, appearance) − 1/n_classes(appearance)"
+      decision: "95% CI 상한 < 0.05 이면 지지 (chance에서 유의하게 벗어나지 않음)"
+  correction: "주 검정 하나만 확증. 보조 셋은 일관성·sanity check용."
+
+# ---------------------------------------------------------------- 탐색적
+exploratory:
+  - "네 target × 네 임베딩 = 16 조합의 accuracy·macro-F1 전체 지도"
+  - "appearance 하위 클래스별 per-class F1 (combined가 pattern·texture에서 특히 유리한지)"
+  - "colour_group에서 image·text 상대 우위 (텍스트 설명에 색상 포함 비율과 관련)"
+  - "임베딩 간 쌍대 비교 전체 (combined vs text, combined vs image, image vs text)"
+  - "n_items × class 수 조건에서 CV polished accuracy의 안정성"
+
+# ---------------------------------------------------------------- 출력
+output:
+  json: "results/D1_probing_results.json"
+  figures:
+    - "results/D1_probing_bar.png"       # 4 targets × 4 embeddings 그룹드 바
+    - "results/D1_probing_delta.png"     # combined − text, image − text 등 쌍대 차이
+
+report_regardless: true
