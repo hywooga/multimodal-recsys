@@ -170,3 +170,27 @@ class VariantMetrics(BaseModel):
     clicks: int
     purchases: int
     ctr: float
+    ctr_ci_95: tuple[float, float] = (0.0, 1.0)   # Wilson score 95% CI (CTR 자체의 신뢰구간)
+
+
+class ABComparison(BaseModel):
+    """두 변량의 지표 비교 (CTR · CVR). baseline 대비 treatment 의 차이와 통계 검정 결과."""
+    metric: Literal["ctr", "cvr"]
+    baseline: str
+    treatment: str
+    baseline_rate: float
+    treatment_rate: float
+    diff: float                                   # treatment_rate - baseline_rate
+    lift: float | None                            # diff / baseline_rate (baseline=0 이면 None)
+    diff_ci_95: tuple[float, float]               # 차이의 Wald 95% CI
+    p_value: float                                # 양측 두 비율 Z-test
+    test: Literal["two_proportion_z"]
+    significant: bool                             # p_value < 0.05
+
+
+class ExperimentStats(BaseModel):
+    """실험 전체 요약: 그룹별 지표 + 그룹 간 통계 검정 결과."""
+    experiment_id: int
+    experiment_name: str
+    variants: list[VariantMetrics]
+    comparisons: list[ABComparison]
